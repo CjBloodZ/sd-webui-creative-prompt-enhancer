@@ -9,6 +9,8 @@
 1. **Кнопка «Enhance»** — Креативно расширяет вашу идею в окне промпта: описывает главного героя, ракурс, микродетали, кинематографичный свет, цвет и композицию.
 2. **Два режима улучшения текста**:
    - **Phi-4 (14B, 4-bit) (по умолчанию)**: Обладая компактной архитектурой всего на 14B параметров, модель Phi-4 работает на уровне гораздо более емких гигантов благодаря глубинному обучению на выверенной академической литературе и книгах, что позволяет ей выстраивать сложные логические цепочки для создания глубоких и креативных промптов. Работает по принципу умного свопа: на время генерации текста родная модель Forge временно выгружается из VRAM, а после генерации возвращается обратно.
+     > 💡 **Загрузка модели (On-Demand)**:
+     > При первом запуске Forge ничего заранее скачиваться не будет. Модель Phi-4 загружается автоматически только при первом её вызове (нажатии кнопки **«Enhance»**). Файлы сохраняются в папку `models/text_encoder/Phi-4-bnb-4bit` (или `models/LLM/Phi-4-bnb-4bit`). Если такой папки нет, скрипт создаст её автоматически.
    - **Use Model Text Encoder**: Улучшение промпта силами родного энкодера активного пресета Forge (**Krea 2**, **Qwen 2.1**, **MOSS Image** и др.).
      > ⚠️ **Важные нюансы**:
      > - **MOSS Image**: из-за специфики энкодера генерация выполняется через **CPU** с высокой нагрузкой на процессор *(используйте на свой страх и риск)*.
@@ -41,6 +43,8 @@ An extension for **Forge NEO** that transforms simple short prompts (in Russian 
 1. **"Enhance" Button** — Creatively expands your idea directly in the prompt box: describes the hero subject, angle/framing, micro-details, cinematic lighting, color, and composition.
 2. **Dual Text Enhancement Modes**:
    - **Phi-4 (14B, 4-bit) (Default)**: Featuring a compact architecture of just 14B parameters, Phi-4 performs on par with much larger giants thanks to deep pre-training on curated academic literature and high-quality books. This enables it to build intricate reasoning chains to craft deep, imaginative prompts. Operates via a smart VRAM swap mechanism: Forge's active model is temporarily unloaded from VRAM during text generation and restored immediately afterward.
+     > 💡 **On-Demand Auto-Download**:
+     > Nothing is downloaded in advance when Forge starts. The Phi-4 model will begin downloading automatically only upon the first click of the **"Enhance"** button. Weights are saved to `models/text_encoder/Phi-4-bnb-4bit` (or `models/LLM/Phi-4-bnb-4bit`). If the folder does not exist, the script creates it automatically.
    - **Use Model Text Encoder**: Enhances prompts using the active Forge preset's native text encoder (**Krea 2**, **Qwen 2.1**, **MOSS Image**, etc.).
      > ⚠️ **Important Notes**:
      > - **MOSS Image**: Due to encoder and Forge architecture specifics, token generation runs on the **CPU** with heavy CPU load *(use at your own discretion)*.
