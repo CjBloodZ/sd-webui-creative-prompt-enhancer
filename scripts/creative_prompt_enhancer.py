@@ -172,29 +172,30 @@ def get_local_model_dir() -> str:
     return os.path.join(models_path, "text_encoder", MODEL_SUBDIR_NAME)
 
 
-class DownloadProgressBar:
+import tqdm
+import tqdm.auto
+
+
+class DownloadProgressBar(tqdm.auto.tqdm):
     """Branded progress bar for model downloads with %, size, and speed."""
-    def __new__(cls, *args, **kwargs):
-        import tqdm
+    def __init__(self, *args, **kwargs):
         desc = kwargs.get("desc", "") or "Downloading"
         clean_desc = os.path.basename(desc) if desc else "Downloading"
         if not clean_desc.startswith("[Creative Prompt Enhancer]"):
             kwargs["desc"] = f"[Creative Prompt Enhancer] {clean_desc}".strip()
         kwargs["ncols"] = 95
         kwargs["leave"] = True
+        super().__init__(*args, **kwargs)
 
-        class _InnerBar(tqdm.tqdm):
-            def update(self, n=1):
-                super().update(n)
-                if self.total and self.total > 0:
-                    try:
-                        if hasattr(shared, "state"):
-                            pct = min(100.0, (self.n / self.total) * 100.0)
-                            shared.state.textinfo = f"Downloading Phi-4: {pct:.1f}%"
-                    except Exception:
-                        pass
-
-        return _InnerBar(*args, **kwargs)
+    def update(self, n=1):
+        super().update(n)
+        if self.total and self.total > 0:
+            try:
+                if hasattr(shared, "state"):
+                    pct = min(100.0, (self.n / self.total) * 100.0)
+                    shared.state.textinfo = f"Downloading Phi-4: {pct:.1f}%"
+            except Exception:
+                pass
 
 
 def ensure_model_installed() -> str:
