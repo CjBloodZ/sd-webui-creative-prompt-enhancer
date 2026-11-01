@@ -172,30 +172,58 @@ def get_local_model_dir() -> str:
     return os.path.join(models_path, "text_encoder", MODEL_SUBDIR_NAME)
 
 
+class DownloadProgressBar:
+    """Branded progress bar for model downloads with %, size, and speed."""
+    def __new__(cls, *args, **kwargs):
+        import tqdm
+        desc = kwargs.get("desc", "") or "Downloading"
+        clean_desc = os.path.basename(desc) if desc else "Downloading"
+        if not clean_desc.startswith("[Creative Prompt Enhancer]"):
+            kwargs["desc"] = f"[Creative Prompt Enhancer] {clean_desc}".strip()
+        kwargs["ncols"] = 95
+        kwargs["leave"] = True
+
+        class _InnerBar(tqdm.tqdm):
+            def update(self, n=1):
+                super().update(n)
+                if self.total and self.total > 0:
+                    try:
+                        if hasattr(shared, "state"):
+                            pct = min(100.0, (self.n / self.total) * 100.0)
+                            shared.state.textinfo = f"Downloading Phi-4: {pct:.1f}%"
+                    except Exception:
+                        pass
+
+        return _InnerBar(*args, **kwargs)
+
+
 def ensure_model_installed() -> str:
-    """Checks if Phi-4 (14B, 4-bit) is present locally or downloads it."""
+    """Checks if Phi-4 (14B, 4-bit) is present locally or downloads it with a visible progress bar."""
     ensure_dependencies()
 
     target_dir = get_local_model_dir()
     if _has_model_weights(target_dir):
         return target_dir
 
-    print(f"[Creative Prompt Enhancer] Model not found locally. Starting automatic download of '{MODEL_HF_REPO}'...")
+    print(f"\n[Creative Prompt Enhancer] Model not found locally. Starting automatic download of '{MODEL_HF_REPO}'...")
     print(f"[Creative Prompt Enhancer] Target path: {target_dir}")
     os.makedirs(target_dir, exist_ok=True)
 
     try:
         from huggingface_hub import snapshot_download
-        with silence_hf_loading():
-            snapshot_download(
-                repo_id=MODEL_HF_REPO,
-                local_dir=target_dir,
-                local_dir_use_symlinks=False,
-                resume_download=True,
-            )
-        print("[Creative Prompt Enhancer] Model download completed successfully!")
+        from huggingface_hub.utils import enable_progress_bars
+        enable_progress_bars()
+
+        snapshot_download(
+            repo_id=MODEL_HF_REPO,
+            local_dir=target_dir,
+            local_dir_use_symlinks=False,
+            resume_download=True,
+            tqdm_class=DownloadProgressBar,
+        )
+        print("\n[Creative Prompt Enhancer] Model download completed successfully!")
     except Exception as e:
-        print(f"[Creative Prompt Enhancer] Error downloading model: {e}")
+        print(f"\n[Creative Prompt Enhancer] Error downloading model: {e}")
         raise RuntimeError(f"Failed to download {MODEL_HF_REPO}: {e}")
 
     return target_dir
