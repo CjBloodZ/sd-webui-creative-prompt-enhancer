@@ -28,6 +28,237 @@ from modules import scripts, shared
 from modules.paths_internal import models_path
 
 # =========================================================================
+# PYTORCH 2.14+ RUNTIME COMPATIBILITY PATCHES (ZERO FORGE CORE EDITS)
+# =========================================================================
+
+def _clean_inference_parameters(module: torch.nn.Module) -> None:
+    if not isinstance(module, torch.nn.Module) or getattr(module, "_cpe_params_cleaned", False):
+        return
+    with torch.inference_mode(False), torch.no_grad():
+        for name, param in module.named_parameters():
+            if param.is_inference():
+                parts = name.split(".")
+                target = module
+                for p in parts[:-1]:
+                    target = getattr(target, p)
+                setattr(target, parts[-1], torch.nn.Parameter(param.data.clone(), requires_grad=param.requires_grad))
+        module._cpe_params_cleaned = True
+
+
+def apply_pytorch_compat_patches() -> None:
+    """
+    Applies in-memory monkey-patches to prevent:
+    'RuntimeError: Inference tensors do not track version counter.'
+    in PyTorch 2.14+ during VAE decoding in Forge NEO.
+    Keeps Forge core 100% clean and untouched.
+    """
+    # 1. Strip @torch.inference_mode() from backend.nn.vae classes
+    try:
+        import backend.nn.vae as vae_nn
+        for cls_name in ("Decoder", "Encoder", "ResnetBlock", "AttnBlock", "Upsample", "Downsample"):
+            cls = getattr(vae_nn, cls_name, None)
+            if cls is not None and hasattr(cls, "forward") and hasattr(cls.forward, "__wrapped__"):
+                cls.forward = cls.forward.__wrapped__
+    except Exception:
+        pass
+
+    # 2. Patch backend.patcher.vae (tiled_scale_multidim & VAE.decode)
+    try:
+        import backend.patcher.vae as patcher_vae
+        if hasattr(patcher_vae.tiled_scale_multidim, "__wrapped__"):
+            patcher_vae.tiled_scale_multidim = torch.no_grad()(patcher_vae.tiled_scale_multidim.__wrapped__)
+
+        if not getattr(patcher_vae.VAE.decode, "_cpe_patched", False):
+            orig_vae_decode = patcher_vae.VAE.decode
+
+            def safe_vae_decode(self, samples_in: torch.Tensor, *args, **kwargs):
+                with torch.inference_mode(False), torch.no_grad():
+                    if hasattr(self, "first_stage_model") and self.first_stage_model is not None:
+                        _clean_inference_parameters(self.first_stage_model)
+                    if isinstance(samples_in, torch.Tensor) and samples_in.is_inference():
+                        samples_in = samples_in.clone()
+                    return orig_vae_decode(self, samples_in, *args, **kwargs)
+
+            safe_vae_decode._cpe_patched = True
+            patcher_vae.VAE.decode = safe_vae_decode
+    except Exception:
+        pass
+
+    # 3. Patch backend.diffusion_engine.base.ForgeDiffusionEngine.decode_first_stage
+    try:
+        from backend.diffusion_engine.base import ForgeDiffusionEngine
+        if not getattr(ForgeDiffusionEngine.decode_first_stage, "_cpe_patched", False):
+            def safe_decode_first_stage(self, x: torch.Tensor):
+                with torch.inference_mode(False), torch.no_grad():
+                    sample = x.clone() if isinstance(x, torch.Tensor) and x.is_inference() else x
+                    sample = self.forge_objects.vae.first_stage_model.process_out(sample)
+                    sample = self.forge_objects.vae.decode(sample).movedim(-1, (2 if self.is_wan else 1)).mul(2.0).sub(1.0)
+                    return sample.to(x)
+
+            safe_decode_first_stage._cpe_patched = True
+            ForgeDiffusionEngine.decode_first_stage = safe_decode_first_stage
+    except Exception:
+        pass
+
+    # 4. Patch modules.sd_samplers_common.decode_first_stage & modules.processing.decode_latent_batch
+    try:
+        sd_samplers_common = sys.modules.get("modules.sd_samplers_common")
+        if sd_samplers_common is None:
+            import modules.sd_samplers_common as sd_samplers_common
+        if not getattr(sd_samplers_common.decode_first_stage, "_cpe_patched", False):
+            orig_sd_decode = sd_samplers_common.decode_first_stage
+
+            def safe_sd_decode(model, x, *args, **kwargs):
+                with torch.inference_mode(False), torch.no_grad():
+                    if isinstance(x, torch.Tensor) and x.is_inference():
+                        x = x.clone()
+                    return orig_sd_decode(model, x, *args, **kwargs)
+
+            safe_sd_decode._cpe_patched = True
+            sd_samplers_common.decode_first_stage = safe_sd_decode
+    except Exception:
+        pass
+
+    try:
+        proc_mod = sys.modules.get("modules.processing")
+        if proc_mod is None:
+            import modules.processing as proc_mod
+        if not getattr(proc_mod.decode_latent_batch, "_cpe_patched", False):
+            orig_decode_latent_batch = proc_mod.decode_latent_batch
+
+            def safe_decode_latent_batch(model, batch, *args, **kwargs):
+                with torch.inference_mode(False), torch.no_grad():
+                    if isinstance(batch, torch.Tensor) and batch.is_inference():
+                        batch = batch.clone()
+                    return orig_decode_latent_batch(model, batch, *args, **kwargs)
+
+            safe_decode_latent_batch._cpe_patched = True
+            proc_mod.decode_latent_batch = safe_decode_latent_batch
+    except Exception:
+        pass
+
+    # 5. Patch backend.operations.ForgeOperations (Conv3d, Conv2d, Linear, weights_manual_cast, get_weight_and_bias)
+    try:
+        import backend.operations as ops
+
+        # Patch weights_manual_cast
+        if not getattr(ops.weights_manual_cast, "_cpe_patched", False):
+            orig_w_cast = ops.weights_manual_cast
+
+            def safe_weights_manual_cast(layer, *args, **kwargs):
+                with torch.inference_mode(False), torch.no_grad():
+                    w, b, sig = orig_w_cast(layer, *args, **kwargs)
+                    if isinstance(w, torch.Tensor) and w.is_inference():
+                        w = w.clone()
+                    if isinstance(b, torch.Tensor) and b.is_inference():
+                        b = b.clone()
+                    return w, b, sig
+
+            safe_weights_manual_cast._cpe_patched = True
+            ops.weights_manual_cast = safe_weights_manual_cast
+
+        # Patch get_weight_and_bias
+        if hasattr(ops, "get_weight_and_bias") and not getattr(ops.get_weight_and_bias, "_cpe_patched", False):
+            orig_get_wb = ops.get_weight_and_bias
+
+            def safe_get_weight_and_bias(layer):
+                with torch.inference_mode(False), torch.no_grad():
+                    w, b = orig_get_wb(layer)
+                    if isinstance(w, torch.Tensor) and w.is_inference():
+                        w = w.clone()
+                    if isinstance(b, torch.Tensor) and b.is_inference():
+                        b = b.clone()
+                    return w, b
+
+            safe_get_weight_and_bias._cpe_patched = True
+            ops.get_weight_and_bias = safe_get_weight_and_bias
+
+        # Patch Conv3d._conv_forward and Conv3d.forward
+        if hasattr(ops.ForgeOperations, "Conv3d"):
+            if not getattr(ops.ForgeOperations.Conv3d._conv_forward, "_cpe_patched", False):
+                orig_conv3d_conv = ops.ForgeOperations.Conv3d._conv_forward
+
+                def safe_conv3d_conv_forward(self, input, weight, bias, autopad=None, *args, **kwargs):
+                    with torch.inference_mode(False), torch.no_grad():
+                        if isinstance(weight, torch.Tensor) and weight.is_inference():
+                            weight = weight.clone()
+                        if isinstance(input, torch.Tensor) and input.is_inference():
+                            input = input.clone()
+                        if isinstance(bias, torch.Tensor) and bias.is_inference():
+                            bias = bias.clone()
+                        return orig_conv3d_conv(self, input, weight, bias, autopad=autopad, *args, **kwargs)
+
+                safe_conv3d_conv_forward._cpe_patched = True
+                ops.ForgeOperations.Conv3d._conv_forward = safe_conv3d_conv_forward
+
+            if not getattr(ops.ForgeOperations.Conv3d.forward, "_cpe_patched", False):
+                orig_conv3d_fwd = ops.ForgeOperations.Conv3d.forward
+
+                def safe_conv3d_forward(self, x, *args, **kwargs):
+                    with torch.inference_mode(False), torch.no_grad():
+                        if isinstance(x, torch.Tensor) and x.is_inference():
+                            x = x.clone()
+                        try:
+                            return orig_conv3d_fwd(self, x, *args, **kwargs)
+                        except RuntimeError as err:
+                            if "Inference tensors" in str(err):
+                                if hasattr(self, "weight") and isinstance(self.weight, torch.Tensor) and self.weight.is_inference():
+                                    self.weight = torch.nn.Parameter(self.weight.clone(), requires_grad=False)
+                                return orig_conv3d_fwd(self, x, *args, **kwargs)
+                            raise
+
+                safe_conv3d_forward._cpe_patched = True
+                ops.ForgeOperations.Conv3d.forward = safe_conv3d_forward
+
+        # Patch Conv2d.forward
+        if hasattr(ops.ForgeOperations, "Conv2d") and not getattr(ops.ForgeOperations.Conv2d.forward, "_cpe_patched", False):
+            orig_conv2d = ops.ForgeOperations.Conv2d.forward
+
+            def safe_conv2d(self, x):
+                with torch.inference_mode(False), torch.no_grad():
+                    if isinstance(x, torch.Tensor) and x.is_inference():
+                        x = x.clone()
+                    try:
+                        return orig_conv2d(self, x)
+                    except RuntimeError as err:
+                        if "Inference tensors" in str(err):
+                            if hasattr(self, "weight") and isinstance(self.weight, torch.Tensor) and self.weight.is_inference():
+                                self.weight = torch.nn.Parameter(self.weight.clone(), requires_grad=False)
+                            return orig_conv2d(self, x)
+                        raise
+
+            safe_conv2d._cpe_patched = True
+            ops.ForgeOperations.Conv2d.forward = safe_conv2d
+
+        # Patch Linear.forward
+        if hasattr(ops.ForgeOperations, "Linear") and not getattr(ops.ForgeOperations.Linear.forward, "_cpe_patched", False):
+            orig_linear = ops.ForgeOperations.Linear.forward
+
+            def safe_linear(self, x):
+                with torch.inference_mode(False), torch.no_grad():
+                    if isinstance(x, torch.Tensor) and x.is_inference():
+                        x = x.clone()
+                    try:
+                        return orig_linear(self, x)
+                    except RuntimeError as err:
+                        if "Inference tensors" in str(err):
+                            if hasattr(self, "weight") and isinstance(self.weight, torch.Tensor) and self.weight.is_inference():
+                                self.weight = torch.nn.Parameter(self.weight.clone(), requires_grad=False)
+                            return orig_linear(self, x)
+                        raise
+
+            safe_linear._cpe_patched = True
+            ops.ForgeOperations.Linear.forward = safe_linear
+
+    except Exception:
+        pass
+
+
+# Apply compatibility patches at extension import time
+apply_pytorch_compat_patches()
+
+
+# =========================================================================
 # PATHS AND CONSTANTS
 # =========================================================================
 
@@ -1898,6 +2129,8 @@ class CreativePromptEnhancerScript(scripts.Script):
         *args,
         **kwargs,
     ):
+        apply_pytorch_compat_patches()
+
         global _CURRENT_DIT_RUN_ID
         _clear_dit_cache()
         _CURRENT_DIT_RUN_ID = uuid.uuid4().hex
