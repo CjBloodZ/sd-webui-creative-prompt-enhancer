@@ -1485,7 +1485,7 @@ def _run_krea2_parts(txtfusion: nn.Module, x_in: torch.Tensor, tap_weights: torc
     tap_mix = y.reshape(b, seq, taps, dim).permute(0, 1, 3, 2).contiguous()
 
     # Scale taps right before linear projection (bypasses RMSNorm scale-invariance!)
-    tap_mix = tap_mix * tap_weights.view(1, 1, 1, taps)
+    tap_mix = tap_mix * tap_weights.view(1, 1, 1, taps).to(dtype=tap_mix.dtype)
 
     projector = getattr(txtfusion, "projector", None)
     if projector is not None:
@@ -1529,11 +1529,11 @@ def _enhanced_krea2_forward(
 
     def _enhance_krea_tensor(t_in: torch.Tensor) -> torch.Tensor:
         _b, _seq, _taps, _dim = t_in.shape
-        w_tensor = torch.tensor(TOP_TIER_PROFILE, device=t_in.device, dtype=torch.float32)
+        w_tensor = torch.tensor(TOP_TIER_PROFILE, device=t_in.device, dtype=t_in.dtype)
         if len(w_tensor) != _taps:
             w_tensor = F.interpolate(w_tensor.view(1, 1, -1), size=_taps, mode="linear", align_corners=True).view(_taps)
 
-        effective_gains = 1.0 + float(strength) * (w_tensor - 1.0)
+        effective_gains = (1.0 + float(strength) * (w_tensor - 1.0)).to(dtype=t_in.dtype)
 
         # 1. Object Focus / Salience (amplifies subjects, colors, actions)
         t_float = t_in.float()
@@ -1570,7 +1570,7 @@ def _enhanced_krea2_forward(
             torch.sqrt(effective_cap / rel_ratio),
         ).clamp(max=1.0)
 
-        return (ref_fp32 + delta * damping).to(cand_out.dtype)
+        return (ref_fp32 + delta * damping).to(dtype=t_in.dtype)
 
     # Handle mixed batch [COND, UNCOND]
     if cond_or_uncond is not None and any(f == 1 for f in cond_or_uncond):
@@ -1583,9 +1583,9 @@ def _enhanced_krea2_forward(
         sample_out = out_cond if out_cond is not None else out_uncond
         res = torch.empty((b,) + tuple(sample_out.shape[1:]), dtype=sample_out.dtype, device=sample_out.device)
         if out_cond is not None:
-            res[cond_idx] = out_cond
+            res[cond_idx] = out_cond.to(dtype=sample_out.dtype)
         if out_uncond is not None:
-            res[uncond_idx] = out_uncond
+            res[uncond_idx] = out_uncond.to(dtype=sample_out.dtype)
     else:
         res = _enhance_krea_tensor(x)
 
@@ -1662,7 +1662,7 @@ def _enhanced_moss_forward(
             torch.sqrt(effective_cap / rel_ratio),
         ).clamp(max=1.0)
 
-        return (ref_fp32 + delta * damping).to(cand_out.dtype)
+        return (ref_fp32 + delta * damping).to(dtype=t_in.dtype)
 
     b = x.shape[0]
     if cond_or_uncond is not None and any(f == 1 for f in cond_or_uncond):
@@ -1675,9 +1675,9 @@ def _enhanced_moss_forward(
         sample_out = out_cond if out_cond is not None else out_uncond
         res = torch.empty((b,) + tuple(sample_out.shape[1:]), dtype=sample_out.dtype, device=sample_out.device)
         if out_cond is not None:
-            res[cond_idx] = out_cond
+            res[cond_idx] = out_cond.to(dtype=sample_out.dtype)
         if out_uncond is not None:
-            res[uncond_idx] = out_uncond
+            res[uncond_idx] = out_uncond.to(dtype=sample_out.dtype)
     else:
         res = _enhance_moss_tensor(x)
 
@@ -1765,7 +1765,7 @@ def _enhanced_qwen_forward(
             torch.sqrt(effective_cap / rel_ratio),
         ).clamp(max=1.0)
 
-        return (ref_fp32 + delta * damping).to(cand_out.dtype)
+        return (ref_fp32 + delta * damping).to(dtype=t_in.dtype)
 
     b = x.shape[0]
     if cond_or_uncond is not None and any(f == 1 for f in cond_or_uncond):
@@ -1778,9 +1778,9 @@ def _enhanced_qwen_forward(
         sample_out = out_cond if out_cond is not None else out_uncond
         res = torch.empty((b,) + tuple(sample_out.shape[1:]), dtype=sample_out.dtype, device=sample_out.device)
         if out_cond is not None:
-            res[cond_idx] = out_cond
+            res[cond_idx] = out_cond.to(dtype=sample_out.dtype)
         if out_uncond is not None:
-            res[uncond_idx] = out_uncond
+            res[uncond_idx] = out_uncond.to(dtype=sample_out.dtype)
     else:
         res = _enhance_qwen_tensor(x)
 
