@@ -15,11 +15,15 @@
      > ⚠️ **Важные нюансы**:
      > - **MOSS Image**: из-за специфики энкодера **Qwen3.5_9B** генерация выполняется через **CPU** с высокой нагрузкой на процессор *(используйте на свой страх и риск)*.
      > - **Квантования**: тесты проводились на **int8_convrot**; на других квантованиях (`nvfp4`, `w4a8`) или сторонних энкодерах возможны отличия в результатах или сбои.
-     > - **Авто-переключение (fallback)**: если у выбранного пресета энкодер не поддерживает генерацию текста (например, T5 или CLIP), скрипт автоматически переключится на **Phi-4** *(следите за информацией в консоли)*.
+     > - **Авто-переключение (fallback)**: если у выбранного пресета энкодер не поддерживает генерацию текста (например, T5, CLIP или Embedding-Only энкодеры вроде MiniMax H3 / Qwen3-VL 32B), скрипт автоматически переключится на **Phi-4** *(следите за информацией в консоли)*.
 3. **Enable Generation Enhancement**:
    - Встроенное аппаратное улучшение скрытых латентов DiT для моделей **Krea 2**, **Qwen 2.1** и **MOSS Image**, на других моделях не тестировалось.
    - Повышает микроконтраст, резкость и структуру генерации при сложных промптах, лучше всего работает на **Krea 2** из-за ее слабого текстового энкодера.
-4. **Индикатор прогресса** — наглядная процентная шкала токенов в консоли в реальном времени.
+4. **Instant generation** *(тумблер)*:
+   - Автоматическая генерация сразу после написания промпта.
+   - Как только модель (Phi-4 или энкодер пресета) завершит улучшение промпта и вернёт оригинальный энкодер в память, улучшенный промпт автоматически подставится в главное поле, страница плавно вернётся наверх и сразу запустится генерация.
+5. **Кнопка «Apply to Main Prompt»** — переносит готовый улучшенный промпт в главное окно генерации и плавно прокручивает страницу наверх к промпту.
+6. **Индикатор прогресса** — наглядная процентная шкала токенов в консоли в реальном времени.
 
 ---
 
@@ -49,11 +53,15 @@ An extension for **Forge NEO** that transforms simple short prompts (in Russian 
      > ⚠️ **Important Notes**:
      > - **MOSS Image**: Due to encoder and Forge architecture specifics, token generation runs on the **CPU** with heavy CPU load *(use at your own discretion)*.
      > - **Quantizations**: Tested on primary standard models; custom quantizations (`nvfp4`, `w4a8`) or other encoders were not extensively tested and might produce varied results or errors.
-     > - **Auto-Fallback**: If the active preset text encoder does not support text generation (e.g. T5 or CLIP), the script automatically switches to **Phi-4** *(check console logs)*.
+     > - **Auto-Fallback**: If the active preset text encoder does not support text generation (e.g. T5, CLIP, or Embedding-Only encoders like MiniMax H3 / Qwen3-VL 32B), the script automatically switches to **Phi-4** *(check console logs)*.
 3. **Enable Generation Enhancement**:
    - Built-in hardware DiT latent enhancement for **Krea 2**, **Qwen 2.1**, and **MOSS Image** (not tested on other architectures).
    - Enhances micro-contrast, sharpness, and generation structure on complex prompts; particularly effective on **Krea 2** due to its lighter text encoder.
-4. **Progress Indicator** — Clear, real-time terminal token percentage progress bar.
+4. **Instant generation** *(toggle)*:
+   - Automatic generation right after prompt enhancement.
+   - As soon as the model (Phi-4 or preset encoder) finishes enhancing the prompt and restores Forge's native text encoder back into VRAM, the enhanced prompt is automatically applied to the main prompt box, the page smoothly scrolls back to the top, and image generation starts automatically.
+5. **"Apply to Main Prompt" Button** — Copies the enhanced prompt into the main generation prompt box and smoothly scrolls the page back up to the prompt.
+6. **Progress Indicator** — Clear, real-time terminal token percentage progress bar.
 
 ### 🚀 Installation
 1. Open **SD WebUI Forge**.

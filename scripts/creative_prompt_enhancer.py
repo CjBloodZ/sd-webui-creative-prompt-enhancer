@@ -488,7 +488,7 @@ def scan_available_text_encoders(force: bool = False) -> dict[str, dict]:
 
         if "vae" in flock:
             info = {"name": fname, "type": "VAE", "can_generate": False}
-        elif "clip" in flock or "t5" in flock or "umt5" in flock:
+        elif any(kw in flock for kw in ("clip", "t5", "umt5", "minimax", "h3", "32b")):
             info = {"name": fname, "type": "Embedding-Only", "can_generate": False}
         elif any(kw in flock for kw in ("qwen", "ernie", "ministral", "gemma", "phi-4", "llama")):
             is_cpu = ("3.5" in flock or "35" in flock) and "9b" in flock
@@ -986,8 +986,8 @@ def _load_forge_encoder_self_contained(selected_model: str):
     has_lm_head = any("lm_head" in k for k in keys)
     has_diffusion = any(k.startswith(("encoder.block.", "transformer.encoder.block.", "text_model.", "transformer.resblocks.")) for k in keys)
 
-    if has_diffusion or any(t in fname_lower for t in ("clip", "t5", "umt5")):
-        raise ValueError(f"Model '{selected_model}' is a diffusion encoder without text generation decoder.")
+    if has_diffusion or any(t in fname_lower for t in ("clip", "t5", "umt5", "minimax", "h3", "32b")):
+        raise ValueError(f"Model '{selected_model}' is a diffusion conditioning text encoder without text generation decoder (lm_head).")
 
     # 1. Qwen 3.5 9B GDN (MOSS Image)
     if has_linear_attn or "3.5" in fname_lower or "qwen35" in fname_lower:
@@ -1055,7 +1055,7 @@ def _load_forge_encoder_self_contained(selected_model: str):
         model_type = "qwen3vl_8b"
 
     # 3. Qwen 3-VL 4B (Krea 2 / Abliterated)
-    elif has_visual and ("4b" in fname_lower or "krea" in fname_lower or "3vl" in fname_lower):
+    elif has_visual and ("4b" in fname_lower or "krea" in fname_lower) and not any(t in fname_lower for t in ("8b", "32b", "minimax")):
         repo_path = os.path.abspath("backend/huggingface/krea/Krea-2-Raw")
         config_path = os.path.join(repo_path, "text_encoder")
         tok_path = os.path.join(repo_path, "tokenizer")
@@ -1363,7 +1363,7 @@ def run_prompt_enhancement(user_prompt: str, use_model_encoder: bool = False) ->
 
         if not can_generate or not encoder_name:
             if encoder_name:
-                print(f"[Creative Prompt Enhancer] Model encoder '{encoder_name}' is not supported. Switched to Phi-4.")
+                print(f"[Creative Prompt Enhancer] Model encoder '{encoder_name}' is a diffusion text encoder (without lm_head). Switched to Phi-4.")
             else:
                 print("[Creative Prompt Enhancer] No compatible Forge encoder found for preset. Switched to Phi-4.")
             return run_phi4_with_encoder_swap(clean_user_prompt)
@@ -2041,14 +2041,14 @@ class CreativePromptEnhancerScript(scripts.Script):
                 )
 
             with gr.Row(elem_classes=["cpe-toggles-container"]):
-                with gr.Column(scale=1, min_width=240, elem_classes=["cpe-toggle-col"]):
+                with gr.Column(scale=1, min_width=220, elem_classes=["cpe-toggle-col"]):
                     use_model_encoder = gr.Checkbox(
                         label="Use Model Text Encoder",
                         value=False,
                         elem_id=f"{pfx}use_model_encoder",
                         elem_classes=["cpe-toggle-switch"],
                     )
-                with gr.Column(scale=2, min_width=380, elem_classes=["cpe-toggle-col"]):
+                with gr.Column(scale=2, min_width=360, elem_classes=["cpe-toggle-col"]):
                     enable_generation_enhancement = gr.Checkbox(
                         label="Enable Generation Enhancement (Krea 2, Qwen 2.1, MOSS Image)",
                         value=False,
@@ -2056,39 +2056,131 @@ class CreativePromptEnhancerScript(scripts.Script):
                         elem_classes=["cpe-toggle-switch"],
                     )
                     gr.HTML("<div class='cpe-subtext'>* Experimental feature, may be unstable</div>")
+                with gr.Column(scale=1, min_width=260, elem_classes=["cpe-toggle-col"]):
+                    instant_generation = gr.Checkbox(
+                        label="Instant generation",
+                        value=False,
+                        elem_id=f"{pfx}instant_generation",
+                        elem_classes=["cpe-toggle-switch"],
+                    )
+                    gr.HTML("<div class='cpe-subtext'>* Automatic generation right after prompt enhancement</div>")
+
+            instant_trigger = gr.Textbox(value="", visible=False, elem_id=f"{pfx}instant_trigger")
 
             with gr.Row():
                 enhance_btn = gr.Button("Enhance", variant="primary", scale=2, elem_id=f"{pfx}btn_enhance")
                 apply_btn = gr.Button("Apply to Main Prompt", variant="secondary", scale=2, elem_id=f"{pfx}btn_apply")
                 clear_btn = gr.Button("Clear", variant="secondary", scale=1, elem_id=f"{pfx}btn_clear")
 
+            main_prompt_comp = (
+                CreativePromptEnhancerScript.img2img_prompt_box if is_img2img
+                else CreativePromptEnhancerScript.txt2img_prompt_box
+            )
+
             js_apply_replace = f"""
             (text) => {{
-                const target = document.querySelector('#{target_name}_prompt textarea');
-                if (target && text) {{
+                const root = (typeof gradioApp === 'function') ? gradioApp() : document;
+                const target = root.querySelector('#{target_name}_prompt textarea');
+                if (target && text && text.trim()) {{
                     target.value = text;
+                    target.scrollTop = 0;
                     target.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     target.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    const scrollTarget = root.querySelector('#{target_name}_toprow')
+                        || root.querySelector('#{target_name}_prompt_container')
+                        || root.querySelector('#{target_name}_prompt')
+                        || target;
+                    setTimeout(() => {{
+                        if (scrollTarget && typeof scrollTarget.scrollIntoView === 'function') {{
+                            scrollTarget.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                        }} else {{
+                            window.scrollTo({{ top: 0, behavior: 'smooth' }});
+                        }}
+                    }}, 30);
                 }}
                 return text;
             }}
             """
 
-            def do_enhance(text, use_encoder):
+            js_instant_generate = f"""
+            (text, instantGen, triggerToken) => {{
+                if (!instantGen || !triggerToken || !text || !text.trim()) {{
+                    return;
+                }}
+                const root = (typeof gradioApp === 'function') ? gradioApp() : document;
+                const target = root.querySelector('#{target_name}_prompt textarea');
+                if (target) {{
+                    if (target.value !== text) {{
+                        target.value = text;
+                        target.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        target.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                    target.scrollTop = 0;
+                }}
+                const scrollTarget = root.querySelector('#{target_name}_toprow')
+                    || root.querySelector('#{target_name}_prompt_container')
+                    || root.querySelector('#{target_name}_prompt')
+                    || target;
+                if (scrollTarget && typeof scrollTarget.scrollIntoView === 'function') {{
+                    scrollTarget.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                }} else {{
+                    window.scrollTo({{ top: 0, behavior: 'smooth' }});
+                }}
+                setTimeout(() => {{
+                    const genBtn = root.querySelector('#{target_name}_generate');
+                    const interruptBtn = root.querySelector('#{target_name}_interrupt');
+                    const isRunning = interruptBtn && interruptBtn.style.display === 'block';
+                    if (genBtn && !isRunning) {{
+                        genBtn.click();
+                    }}
+                }}, 150);
+            }}
+            """
+
+            def do_enhance(text, use_encoder, instant_gen):
                 try:
-                    return run_prompt_enhancement(text, use_model_encoder=use_encoder)
+                    res = run_prompt_enhancement(text, use_model_encoder=use_encoder)
                 except Exception as e:
                     err_msg = f"Enhancement failed: {e}"
                     print(f"[Creative Prompt Enhancer] {err_msg}")
-                    return err_msg
+                    if main_prompt_comp is not None:
+                        return err_msg, gr.update(), ""
+                    return err_msg, ""
+
+                has_result = bool(res and res.strip())
+                trigger_token = uuid.uuid4().hex if has_result else ""
+                if instant_gen and has_result:
+                    print("[Creative Prompt Enhancer] Instant generation enabled: applying prompt and starting generation...")
+
+                if main_prompt_comp is not None:
+                    main_update = res if (instant_gen and has_result) else gr.update()
+                    return res, main_update, trigger_token
+                return res, trigger_token
+
+            def do_apply(text):
+                if text and text.strip():
+                    return text
+                return gr.update()
 
             def do_clear():
                 return "", ""
 
+            enhance_outputs = (
+                [enhanced_prompt, main_prompt_comp, instant_trigger]
+                if main_prompt_comp is not None
+                else [enhanced_prompt, instant_trigger]
+            )
+
             enhance_btn.click(
                 fn=do_enhance,
-                inputs=[input_prompt, use_model_encoder],
-                outputs=[enhanced_prompt],
+                inputs=[input_prompt, use_model_encoder, instant_generation],
+                outputs=enhance_outputs,
+            ).then(
+                fn=None,
+                inputs=[enhanced_prompt, instant_generation, instant_trigger],
+                outputs=[],
+                _js=js_instant_generate,
+                show_progress=False,
             )
 
             clear_btn.click(
@@ -2097,14 +2189,9 @@ class CreativePromptEnhancerScript(scripts.Script):
                 outputs=[input_prompt, enhanced_prompt],
             )
 
-            main_prompt_comp = (
-                CreativePromptEnhancerScript.img2img_prompt_box if is_img2img
-                else CreativePromptEnhancerScript.txt2img_prompt_box
-            )
-
             if main_prompt_comp is not None:
                 apply_btn.click(
-                    fn=lambda text: text,
+                    fn=do_apply,
                     inputs=[enhanced_prompt],
                     outputs=[main_prompt_comp],
                     _js=js_apply_replace,
@@ -2117,7 +2204,13 @@ class CreativePromptEnhancerScript(scripts.Script):
                     _js=js_apply_replace,
                 )
 
-        return [input_prompt, enhanced_prompt, use_model_encoder, enable_generation_enhancement]
+        return [
+            input_prompt,
+            enhanced_prompt,
+            use_model_encoder,
+            enable_generation_enhancement,
+            instant_generation,
+        ]
 
     def process_before_every_sampling(
         self,
@@ -2126,6 +2219,7 @@ class CreativePromptEnhancerScript(scripts.Script):
         enhanced_prompt=None,
         use_model_encoder=False,
         enable_generation_enhancement=False,
+        instant_generation=False,
         *args,
         **kwargs,
     ):
